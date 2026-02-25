@@ -24,12 +24,12 @@
     "typecheck": "tsc --noEmit"
   },
   "keywords": [
-    "npm-package",
-    "starter",
-    "template",
-    "typescript",
-    "javascript",
-    "library"
+    "beamdrop",
+    "s3",
+    "file-sharing",
+    "storage",
+    "self-hosted",
+    "typescript"
   ],
   "devDependencies": {
     "@types/jest": "^30.0.0",
