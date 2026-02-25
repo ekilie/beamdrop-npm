@@ -251,33 +251,83 @@ export interface ListPrettyPresignedUrlsResponse {
 /**
  * Beamdrop – TypeScript client for the Beamdrop S3‑compatible API.
  *
- * Handles HMAC‑SHA256 request signing, presigned URL generation,
- * and all bucket / object operations.
+ * Provides a high‑level, strongly‑typed interface to the Beamdrop file‑sharing
+ * server. Every request is authenticated with HMAC‑SHA256 request signing
+ * (similar to AWS Signature v4) using the provided access/secret key pair.
+ *
+ * **Features:**
+ * - Full bucket CRUD (create, delete, list, exists check)
+ * - Object upload, download, delete, HEAD, and prefix‑based listing
+ * - Client‑side HMAC presigned URL generation (no server round‑trip)
+ * - Server‑side pretty presigned URL management (create, list, revoke)
+ * - Automatic request timeout via `AbortController`
+ *
+ * **Authentication:**
+ * Every request includes an `Authorization: Bearer {accessKey}:{signature}`
+ * header and an `X-Beamdrop-Date` timestamp header. The signature is
+ * `Base64(HMAC-SHA256(secretKey, "METHOD\nPATH\nTIMESTAMP"))`.
  *
  * @example
- * const beamdrop = new Beamdrop({
+ * ```ts
+ * import { Beamdrop, BeamdropException } from 'beamdrop';
+ *
+ * const client = new Beamdrop({
  *   baseUrl: 'https://files.example.com',
  *   accessKey: 'BDK_abc123',
  *   secretKey: 'sk_secret',
  * });
  *
- * await beamdrop.createBucket('avatars');
- * await beamdrop.putObject('avatars', 'user-1/photo.jpg', fileBuffer);
- * const url = beamdrop.presignedUrl('avatars', 'user-1/photo.jpg', 3600);
+ * // Create a bucket and upload a file
+ * await client.createBucket('avatars');
+ * await client.putObject('avatars', 'user-1/photo.jpg', fileBuffer);
+ *
+ * // Generate a presigned download URL valid for 1 hour
+ * const url = await client.presignedUrl('avatars', 'user-1/photo.jpg', 3600);
+ * console.log(url);
+ * ```
  */
 export class Beamdrop {
+  /** Base URL of the Beamdrop server (trailing slash removed). */
   private readonly baseUrl: string;
+
+  /** API access key ID (typically starts with `BDK_`). */
   private readonly accessKey: string;
+
+  /** API secret key used for HMAC‑SHA256 request signing. */
   private readonly secretKey: string;
+
+  /**
+   * Connection timeout in milliseconds.
+   * @remarks Currently declared for future use; the Web Fetch API does not
+   *          support a separate connection‑level timeout.
+   */
   private readonly connectTimeout: number;
+
+  /** Total request timeout in milliseconds (applied via `AbortController`). */
   private readonly timeout: number;
 
   /**
-   * @param options.baseUrl        Base URL of the Beamdrop server (no trailing slash).
-   * @param options.accessKey      API access key ID (starts with BDK_).
-   * @param options.secretKey      API secret key (starts with sk_).
-   * @param options.connectTimeout Connection timeout in milliseconds (default: 10000).
-   * @param options.timeout        Total request timeout in milliseconds (default: 120000).
+   * Create a new Beamdrop client.
+   *
+   * @param options                - Configuration for the client.
+   * @param options.baseUrl        - Base URL of the Beamdrop server (trailing slash is stripped automatically).
+   * @param options.accessKey      - API access key ID (starts with `BDK_`).
+   * @param options.secretKey      - API secret key (starts with `sk_`), used for HMAC‑SHA256 signing.
+   * @param options.connectTimeout - Connection timeout in milliseconds. Defaults to `10_000` (10 s).
+   *                                 Reserved for future use; not enforced by the Web Fetch API.
+   * @param options.timeout        - Total request timeout in milliseconds. Defaults to `120_000` (2 min).
+   *                                 If a request takes longer, it is aborted and a
+   *                                 {@link BeamdropException} with `status === 0` is thrown.
+   *
+   * @example
+   * ```ts
+   * const client = new Beamdrop({
+   *   baseUrl: 'https://files.example.com',
+   *   accessKey: 'BDK_abc123',
+   *   secretKey: 'sk_secret',
+   *   timeout: 30_000, // 30 seconds
+   * });
+   * ```
    */
   constructor(options: {
     baseUrl: string;
@@ -298,9 +348,20 @@ export class Beamdrop {
   // --------------------------------------------------------------------
 
   /**
-   * Create a new bucket.
-   * @param name Bucket name (3‑63 lowercase alphanumeric, hyphens, dots).
-   * @throws {BeamdropException} 409 if the bucket already exists.
+   * Create a new storage bucket.
+   *
+   * Bucket names must be 3–63 characters long and may only contain
+   * lowercase alphanumeric characters, hyphens (`-`), and dots (`.`).
+   *
+   * @param name - Desired bucket name.
+   * @returns Metadata about the newly created bucket.
+   * @throws {BeamdropException} `409 Conflict` if a bucket with the same name already exists.
+   *
+   * @example
+   * ```ts
+   * const result = await client.createBucket('user-uploads');
+   * console.log(result.location); // "/api/v1/buckets/user-uploads"
+   * ```
    */
   async createBucket(name: string): Promise<CreateBucketResponse> {
     return this.request('PUT', `/api/v1/buckets/${name}`);
@@ -308,8 +369,19 @@ export class Beamdrop {
 
   /**
    * Delete an empty bucket.
-   * @param name Bucket name.
-   * @throws {BeamdropException} 404 if not found, 409 if not empty.
+   *
+   * The bucket must contain no objects; attempting to delete a non‑empty
+   * bucket results in a `409 Conflict` error.
+   *
+   * @param name - Name of the bucket to delete.
+   * @returns `true` on successful deletion.
+   * @throws {BeamdropException} `404 Not Found` if the bucket does not exist.
+   * @throws {BeamdropException} `409 Conflict` if the bucket is not empty.
+   *
+   * @example
+   * ```ts
+   * await client.deleteBucket('old-uploads');
+   * ```
    */
   async deleteBucket(name: string): Promise<true> {
     await this.request('DELETE', `/api/v1/buckets/${name}`);
@@ -317,14 +389,36 @@ export class Beamdrop {
   }
 
   /**
-   * List all buckets.
+   * List all buckets accessible to the authenticated API key.
+   *
+   * @returns An object containing an array of {@link BucketInfo} entries
+   *          and a `count` of total buckets.
+   *
+   * @example
+   * ```ts
+   * const { buckets, count } = await client.listBuckets();
+   * buckets.forEach(b => console.log(b.name, b.createdAt));
+   * ```
    */
   async listBuckets(): Promise<ListBucketsResponse> {
     return this.request('GET', '/api/v1/buckets');
   }
 
   /**
-   * Check whether a bucket exists (uses HEAD, no body).
+   * Check whether a bucket exists.
+   *
+   * Uses a HEAD request so no response body is transferred. Returns `false`
+   * for a `404` response and re‑throws any other errors.
+   *
+   * @param name - Bucket name to check.
+   * @returns `true` if the bucket exists, `false` otherwise.
+   *
+   * @example
+   * ```ts
+   * if (await client.bucketExists('avatars')) {
+   *   console.log('Bucket is ready');
+   * }
+   * ```
    */
   async bucketExists(name: string): Promise<boolean> {
     try {
@@ -343,11 +437,28 @@ export class Beamdrop {
   // --------------------------------------------------------------------
 
   /**
-   * Upload a file (raw bytes).
-   * @param bucket Bucket name.
-   * @param key    Object key (may contain slashes).
-   * @param body   Raw file content (string, Buffer, Blob, etc.)
-   * @throws {BeamdropException} 404 bucket not found, 423 locked, 429 rate limited.
+   * Upload an object (file) to a bucket.
+   *
+   * The object key may include path separators (`/`) to emulate a directory
+   * hierarchy; the server stores them flat but supports prefix‑based listing.
+   *
+   * Content‑Type is auto‑detected as `application/json` when `body` is a
+   * string starting with `{` or `[`, and `application/octet-stream` otherwise.
+   *
+   * @param bucket - Target bucket name.
+   * @param key    - Object key (e.g. `"photos/vacation/img_001.jpg"`).
+   * @param body   - Raw file content. Accepts any `BodyInit` value:
+   *                 `string`, `Blob`, `ArrayBuffer`, `ReadableStream`, etc.
+   * @returns Metadata about the stored object, including its `etag` and `size`.
+   * @throws {BeamdropException} `404` if the bucket does not exist.
+   * @throws {BeamdropException} `423 Locked` if the object is locked.
+   * @throws {BeamdropException} `429 Too Many Requests` if rate‑limited.
+   *
+   * @example
+   * ```ts
+   * const result = await client.putObject('avatars', 'user-1/photo.jpg', fileBuffer);
+   * console.log(`Uploaded ${result.size} bytes, etag: ${result.etag}`);
+   * ```
    */
   async putObject(
     bucket: string,
@@ -358,20 +469,42 @@ export class Beamdrop {
   }
 
   /**
-   * Download a file – returns raw body and metadata.
-   * @param bucket Bucket name.
-   * @param key    Object key.
-   * @throws {BeamdropException} 404 if not found.
+   * Download an object – returns the raw file body together with response‑header metadata.
+   *
+   * The body is read as a UTF‑8 `string` via `response.text()`. For binary
+   * payloads (images, archives, etc.) the content may be corrupted; prefer
+   * downloading through a presigned URL for binary files.
+   *
+   * @param bucket - Bucket name.
+   * @param key    - Object key.
+   * @returns A {@link GetObjectResponse} containing the file body and metadata
+   *          (`content_type`, `content_length`, `etag`, `last_modified`).
+   * @throws {BeamdropException} `404 Not Found` if the object does not exist.
+   *
+   * @example
+   * ```ts
+   * const obj = await client.getObject('configs', 'app/settings.json');
+   * const settings = JSON.parse(obj.body);
+   * console.log(`Content-Type: ${obj.content_type}, Size: ${obj.content_length}`);
+   * ```
    */
   async getObject(bucket: string, key: string): Promise<GetObjectResponse> {
     return await this.rawRequest('GET', `/api/v1/buckets/${bucket}/${key}`) as GetObjectResponse;
   }
 
   /**
-   * Delete a file.
-   * @param bucket Bucket name.
-   * @param key    Object key.
-   * @throws {BeamdropException} 404 if not found, 423 if locked.
+   * Delete an object from a bucket.
+   *
+   * @param bucket - Bucket name.
+   * @param key    - Object key to delete.
+   * @returns `true` on successful deletion.
+   * @throws {BeamdropException} `404 Not Found` if the object does not exist.
+   * @throws {BeamdropException} `423 Locked` if the object is locked.
+   *
+   * @example
+   * ```ts
+   * await client.deleteObject('avatars', 'user-1/old-photo.jpg');
+   * ```
    */
   async deleteObject(bucket: string, key: string): Promise<true> {
     await this.request('DELETE', `/api/v1/buckets/${bucket}/${key}`);
@@ -379,17 +512,43 @@ export class Beamdrop {
   }
 
   /**
-   * Get object metadata without downloading the body.
-   * @param bucket Bucket name.
-   * @param key    Object key.
-   * @throws {BeamdropException} 404 if not found.
+   * Retrieve object metadata without downloading the body (HEAD request).
+   *
+   * Useful for checking an object’s size, content type, or last‑modified
+   * date before deciding whether to download the full content.
+   *
+   * @param bucket - Bucket name.
+   * @param key    - Object key.
+   * @returns An {@link ObjectMetadata} object with `content_type`,
+   *          `content_length`, `etag`, and `last_modified` fields.
+   * @throws {BeamdropException} `404 Not Found` if the object does not exist.
+   *
+   * @example
+   * ```ts
+   * const meta = await client.headObject('docs', 'report.pdf');
+   * console.log(`Size: ${meta.content_length}, Type: ${meta.content_type}`);
+   * ```
    */
   async headObject(bucket: string, key: string): Promise<ObjectMetadata> {
     return await this.rawRequest('HEAD', `/api/v1/buckets/${bucket}/${key}`);
   }
 
   /**
-   * Check whether an object exists.
+   * Check whether an object exists in a bucket.
+   *
+   * Internally performs a HEAD request via {@link headObject}. Returns
+   * `false` for a `404` response and re‑throws any other errors.
+   *
+   * @param bucket - Bucket name.
+   * @param key    - Object key to check.
+   * @returns `true` if the object exists, `false` otherwise.
+   *
+   * @example
+   * ```ts
+   * if (await client.objectExists('avatars', 'user-1/photo.jpg')) {
+   *   console.log('File is already uploaded');
+   * }
+   * ```
    */
   async objectExists(bucket: string, key: string): Promise<boolean> {
     try {
@@ -404,11 +563,30 @@ export class Beamdrop {
   }
 
   /**
-   * List objects in a bucket with optional prefix/delimiter filtering.
-   * @param bucket     Bucket name.
-   * @param prefix     Only return keys starting with this prefix.
-   * @param delimiter  Group keys by this character (usually '/').
-   * @param maxKeys    Maximum number of results (1–1000, default 1000).
+   * List objects in a bucket with optional prefix and delimiter filtering.
+   *
+   * Works similarly to S3’s `ListObjectsV2`. When a `delimiter` is provided
+   * (typically `"/"`), keys that share a common prefix up to the delimiter
+   * are grouped into {@link ListObjectsResponse.commonPrefixes}, enabling
+   * virtual‑directory navigation.
+   *
+   * Internally sets the `list=true` query parameter, which is required by
+   * the Beamdrop server to enter object‑listing mode.
+   *
+   * @param bucket    - Bucket name.
+   * @param prefix    - Only return keys starting with this prefix (e.g. `"photos/2025/"`).
+   * @param delimiter - Character used to group keys into common prefixes (usually `"/"`).
+   * @param maxKeys   - Maximum number of results to return, between 1 and 1000.
+   *                    Defaults to `1000`.
+   * @returns A {@link ListObjectsResponse} with matching objects and common prefixes.
+   *
+   * @example
+   * ```ts
+   * // List all objects under the "photos/" prefix
+   * const result = await client.listObjects('media', 'photos/', '/');
+   * console.log('Files:', result.contents.map(o => o.key));
+   * console.log('Folders:', result.commonPrefixes);
+   * ```
    */
   async listObjects(
     bucket: string,
@@ -432,14 +610,33 @@ export class Beamdrop {
   // --------------------------------------------------------------------
 
   /**
-   * Generate a client‑side HMAC presigned URL for downloading a file.
-   * The token is computed locally using the secret key; no server round‑trip.
+   * Generate a client‑side HMAC presigned URL for accessing an object.
    *
-   * @param bucket     Bucket name.
-   * @param key        Object key.
-   * @param expiresIn  Seconds until the URL expires (e.g. 3600 = 1 hour).
-   * @param method     HTTP method the URL is valid for (default: "GET").
-   * @returns Full presigned URL.
+   * The presigned token is computed entirely on the client using the secret
+   * key — **no server round‑trip is required**. The resulting URL can be
+   * shared with unauthenticated users to grant temporary access to the file.
+   *
+   * **Token format:**
+   * ```
+   * Base64URL(HMAC-SHA256(secretKey, "METHOD\nBUCKET\nKEY\nUNIX_TIMESTAMP"))
+   * ```
+   *
+   * The URL includes `token`, `expires` (ISO 8601), and `access_key` as
+   * query parameters for the server to verify.
+   *
+   * @param bucket    - Bucket name.
+   * @param key       - Object key.
+   * @param expiresIn - Number of seconds until the URL expires (e.g. `3600` = 1 hour).
+   * @param method    - HTTP method the URL is valid for. Defaults to `"GET"`.
+   * @returns The fully‑qualified presigned URL as a string.
+   *
+   * @example
+   * ```ts
+   * // Generate a download link valid for 24 hours
+   * const url = await client.presignedUrl('docs', 'report.pdf', 86400);
+   * console.log(url);
+   * // => "https://files.example.com/api/v1/buckets/docs/report.pdf?token=...&expires=...&access_key=..."
+   * ```
    */
   async presignedUrl(
     bucket: string,
@@ -469,13 +666,32 @@ export class Beamdrop {
   // --------------------------------------------------------------------
 
   /**
-   * Create a server‑side pretty presigned URL via the registry.
-   * @param bucket       Bucket name.
-   * @param key          Object key.
-   * @param expiresIn    Seconds until the URL expires (null = no expiry).
-   * @param maxDownloads Maximum number of downloads (null = unlimited).
-   * @param method       HTTP method (default: "GET").
-   * @throws {BeamdropException} on failure.
+   * Create a server‑managed pretty presigned URL.
+   *
+   * Unlike client‑side presigned URLs (see {@link presignedUrl}), pretty
+   * presigned URLs are registered on the server and produce short,
+   * human‑friendly download links (e.g. `https://files.example.com/dl/abc123`).
+   * The server can enforce download limits and expiration policies.
+   *
+   * @param bucket       - Bucket name.
+   * @param key          - Object key.
+   * @param expiresIn    - Seconds until the URL expires, or `null`/`undefined`
+   *                       for a URL that never expires.
+   * @param maxDownloads - Maximum number of downloads before the URL is
+   *                       automatically revoked, or `null`/`undefined` for unlimited.
+   * @param method       - HTTP method the URL is valid for. Defaults to `"GET"`.
+   * @returns A {@link CreatePrettyPresignedUrlResponse} with the generated
+   *          token, full download URL, and associated metadata.
+   * @throws {BeamdropException} On any server‑side failure.
+   *
+   * @example
+   * ```ts
+   * // Create a link that expires in 7 days and allows at most 100 downloads
+   * const link = await client.createPrettyPresignedUrl(
+   *   'reports', 'q4-results.pdf', 7 * 86400, 100,
+   * );
+   * console.log(link.url); // "https://files.example.com/dl/x7kQ9m"
+   * ```
    */
   async createPrettyPresignedUrl(
     bucket: string,
@@ -492,9 +708,18 @@ export class Beamdrop {
   }
 
   /**
-   * Revoke (delete) a server‑side pretty presigned URL.
-   * @param token The presigned URL token.
-   * @throws {BeamdropException} 404 if token not found.
+   * Revoke (delete) a server‑managed pretty presigned URL.
+   *
+   * Once revoked, the short download link immediately stops working.
+   *
+   * @param token - The opaque token identifying the presigned URL to revoke.
+   * @returns `true` on successful revocation.
+   * @throws {BeamdropException} `404 Not Found` if the token does not exist.
+   *
+   * @example
+   * ```ts
+   * await client.revokePrettyPresignedUrl('x7kQ9m');
+   * ```
    */
   async revokePrettyPresignedUrl(token: string): Promise<true> {
     await this.request('DELETE', `/api/v1/presign/${token}`);
@@ -502,7 +727,20 @@ export class Beamdrop {
   }
 
   /**
-   * List all server‑side pretty presigned URLs.
+   * List all active server‑managed pretty presigned URLs.
+   *
+   * Returns every non‑revoked pretty presigned URL that has been created,
+   * including any that may have expired but have not yet been cleaned up.
+   *
+   * @returns A {@link ListPrettyPresignedUrlsResponse} with the full array
+   *          of URLs and a total count.
+   *
+   * @example
+   * ```ts
+   * const { urls, count } = await client.listPrettyPresignedUrls();
+   * console.log(`${count} active presigned URLs`);
+   * urls.forEach(u => console.log(u.token, u.url, u.expiresAt));
+   * ```
    */
   async listPrettyPresignedUrls(): Promise<ListPrettyPresignedUrlsResponse> {
     return this.request('GET', '/api/v1/presign');
@@ -513,7 +751,21 @@ export class Beamdrop {
   // --------------------------------------------------------------------
 
   /**
-   * Send a request expecting a JSON response.
+   * Send an authenticated request and parse the response as JSON.
+   *
+   * Handles the full request lifecycle: signing, sending, status checking,
+   * and JSON parsing. A `204 No Content` response returns an empty object.
+   * Non‑2xx responses are thrown as {@link BeamdropException}.
+   *
+   * @typeParam T - Expected shape of the parsed JSON response.
+   * @param method - HTTP method (e.g. `"GET"`, `"PUT"`, `"DELETE"`).
+   * @param path   - Server‑relative path including any query string
+   *                 (e.g. `"/api/v1/buckets/my-bucket?list=true"`).
+   * @param body   - Optional request body (`BodyInit`).
+   * @returns The parsed JSON response cast to `T`.
+   * @throws {BeamdropException} For any non‑2xx HTTP status.
+   *
+   * @internal
    */
   private async request<T = any>(
     method: string,
@@ -546,8 +798,20 @@ export class Beamdrop {
   }
 
   /**
-   * Send a request that returns raw content (file downloads, HEAD).
-   * Returns an object with body (if not HEAD) and metadata headers.
+   * Send an authenticated request and return raw content with HTTP‑header metadata.
+   *
+   * Used by {@link getObject} (GET) and {@link headObject} (HEAD). For GET
+   * requests the response body is included; for HEAD it is omitted.
+   *
+   * Metadata (`content_type`, `content_length`, `etag`, `last_modified`)
+   * is extracted directly from the response headers.
+   *
+   * @param method - HTTP method (`"GET"` or `"HEAD"`).
+   * @param path   - Server‑relative path to the object.
+   * @returns A {@link GetObjectResponse} (GET) or {@link ObjectMetadata} (HEAD).
+   * @throws {BeamdropException} For any non‑2xx HTTP status.
+   *
+   * @internal
    */
   private async rawRequest(
     method: string,
@@ -580,8 +844,29 @@ export class Beamdrop {
   }
 
   /**
-   * Low‑level fetch with HMAC‑SHA256 signing and timeouts.
-   * Returns status, response body (as string), and headers.
+   * Low‑level HTTP fetch with HMAC‑SHA256 request signing and timeout.
+   *
+   * Constructs the `Authorization` and `X-Beamdrop-Date` headers, applies
+   * content‑type detection for string bodies, and enforces the configured
+   * {@link timeout} via `AbortController`.
+   *
+   * **Signature algorithm:**
+   * ```
+   * stringToSign = "METHOD\nPATHNAME\nTIMESTAMP"
+   * signature    = Base64(HMAC-SHA256(secretKey, stringToSign))
+   * Authorization: Bearer {accessKey}:{signature}
+   * ```
+   *
+   * @param method - HTTP method.
+   * @param path   - Server‑relative path (may include query string;
+   *                 only the pathname portion is signed).
+   * @param body   - Optional request body.
+   * @returns An object containing the HTTP `status`, the response body as
+   *          a `string`, and the response `Headers`.
+   * @throws {BeamdropException} `status=0` on timeout (`AbortError`) or
+   *         network failure.
+   *
+   * @internal
    */
   private async sendRequest(
     method: string,
@@ -640,7 +925,16 @@ export class Beamdrop {
   // --------------------------------------------------------------------
 
   /**
-   * Compute HMAC‑SHA256 and return standard Base64.
+   * Compute an HMAC‑SHA256 digest and return it as a standard Base64 string.
+   *
+   * Uses the Web Crypto API (`crypto.subtle`) which is available in modern
+   * browsers, Node.js ≥ 15, Deno, and Cloudflare Workers.
+   *
+   * @param secret  - The HMAC secret key (UTF‑8 string).
+   * @param message - The message to sign (UTF‑8 string).
+   * @returns Standard Base64‑encoded HMAC‑SHA256 signature.
+   *
+   * @internal
    */
   private async hmacSha256Base64(secret: string, message: string): Promise<string> {
     const encoder = new TextEncoder();
@@ -656,8 +950,20 @@ export class Beamdrop {
   }
 
   /**
-   * Compute HMAC‑SHA256 and return URL‑safe Base64 (no padding, + → -, / → _).
-   * Used for presigned URL tokens.
+   * Compute an HMAC‑SHA256 digest and return it as URL‑safe Base64
+   * (`+` → `-`, `/` → `_`, padding preserved).
+   *
+   * The Beamdrop server’s `GeneratePresignedToken` uses Go’s
+   * `base64.URLEncoding` which **includes** padding (`=`), so padding
+   * must not be stripped here.
+   *
+   * Used exclusively for presigned URL token generation.
+   *
+   * @param secret  - The HMAC secret key (UTF‑8 string).
+   * @param message - The message to sign (UTF‑8 string).
+   * @returns URL‑safe Base64‑encoded HMAC‑SHA256 signature (with padding).
+   *
+   * @internal
    */
   private async hmacSha256Base64Url(secret: string, message: string): Promise<string> {
     const base64 = await this.hmacSha256Base64(secret, message);
