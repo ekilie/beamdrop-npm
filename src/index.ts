@@ -272,6 +272,7 @@ export class Beamdrop {
     maxKeys = 1000
   ): Promise<ListObjectsResponse> {
     const params = new URLSearchParams();
+    params.set('list', 'true'); // required to trigger list mode on the server
     if (prefix !== undefined) params.set('prefix', prefix);
     if (delimiter !== undefined) params.set('delimiter', delimiter);
     if (maxKeys !== 1000) params.set('max-keys', maxKeys.toString());
@@ -515,6 +516,6 @@ export class Beamdrop {
    */
   private async hmacSha256Base64Url(secret: string, message: string): Promise<string> {
     const base64 = await this.hmacSha256Base64(secret, message);
-    return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    return base64.replace(/\+/g, '-').replace(/\//g, '_'); // keep padding — server uses base64.URLEncoding WITH padding
   }
 }
