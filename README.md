@@ -1,131 +1,152 @@
-# OTPX
+# beamdrop
 
-A lightweight, flexible OTP (One-Time Password) generator for Node.js and TypeScript.
-
-Supports multiple charsets (numeric, alphabetic, alphanumeric, hex, or custom), case options, and exclusion of ambiguous characters like `O0Il`.
-
----
+Official TypeScript/JavaScript client for [Beamdrop](https://github.com/ekilie/beamdrop) — a lightweight, self-hosted file sharing server with an S3-compatible API.
 
 ## Features
 
-- Generate OTPs with customizable length
-- Built-in charsets: `numeric`, `alphabetic`, `alphanumeric`, `hex`
-- Provide your own custom charset
-- Exclude visually similar characters (`O`, `0`, `I`, `l`)
-- Case handling: upper, lower, or mixed
-- Secure random generation using Node.js `crypto`
-
----
+- Full **bucket** CRUD — create, delete, list, exists check
+- **Object** upload, download, delete, HEAD, and prefix-based listing
+- **Client-side presigned URLs** — HMAC-SHA256 tokens generated locally, no server round-trip
+- **Server-side pretty presigned URLs** — short, human-friendly download links with expiry and download limits
+- HMAC-SHA256 request signing (similar to AWS Signature v4)
+- Zero runtime dependencies — uses the built-in `fetch` and Web Crypto APIs
+- Works in Node.js ≥ 18, Deno, Bun, and Cloudflare Workers
 
 ## Installation
 
 ```bash
-npm install otpx
-# or
-
+npm install beamdrop
 ```
 
----
-
-## Usage
-
-### Basic Example
+## Quick Start
 
 ```ts
-import OTPX from "otpx";
+import { Beamdrop } from 'beamdrop';
 
-// Generate a 6-digit numeric OTP
-const otp = OTPX.numeric();
-console.log(otp); // e.g. "583920"
+const client = new Beamdrop({
+  baseUrl: 'https://files.example.com',
+  accessKey: 'BDK_abc123',
+  secretKey: 'sk_secret',
+});
+
+// Create a bucket
+await client.createBucket('avatars');
+
+// Upload a file
+const result = await client.putObject('avatars', 'user-1/photo.jpg', fileBuffer);
+console.log(`Uploaded ${result.size} bytes`);
+
+// Download a file
+const obj = await client.getObject('avatars', 'user-1/photo.jpg');
+console.log(obj.content_type, obj.content_length);
+
+// Generate a presigned download URL (valid for 1 hour)
+const url = await client.presignedUrl('avatars', 'user-1/photo.jpg', 3600);
+console.log(url);
 ```
 
----
+## API Reference
 
-### Using Different Charsets
-
-`````ts
-import OTPX from "otpx";
-
-// Alphabetic OTP (mixed case)
-console.log(OTPX.alphabetic(8)); // e.g. "aZkPqTrB"
-
-// Alphanumeric OTP with options
-console.log(OTPX.alphanumeric(10, { excludeSimilar: true }));
-// e.g. "9kPz3Hd2Gq"
-
-// Hexadecimal OTP
-````markdown
-# npm-package-starter-template
-
-A minimal, reusable TypeScript npm package starter template. This repository demonstrates a small library layout with build, test, and type-checking setup so you can quickly scaffold a new package.
-
-## What's included
-- TypeScript source in `src/`
-- Build with `tsup` (CJS + ESM + types)
-- Tests with `jest` + `ts-jest`
-- `tsconfig.json` configured for library builds
-- `LICENSE` (MIT) and example `README.md`
-
-## Quickstart
-
-1. Clone this repo and replace package metadata in `package.json` (name, author, repository, homepage, description).
-2. Update the package source in `src/` and tests in `test/`.
-3. Install dependencies and develop.
-
-```bash
-npm install
-npm run build      # produce dist/ bundles
-npm run test       # run tests
-npm run typecheck  # run TypeScript type check
-`````
-
-When publishing, update `version` and run `npm publish` (or use CI to publish).
-
-## Development
-
-- Run tests in watch mode:
-
-```bash
-npm run test:watch
-```
-
-- Clean output and rebuild:
-
-```bash
-npm run clean
-npm run build
-```
-
-## Usage Example
-
-Replace `your-package-name` with the name you set in `package.json`.
+### Constructor
 
 ```ts
-import MyPackage from "your-package-name";
-
-// use exports from src/index.ts
-console.log(typeof MyPackage);
+new Beamdrop(options)
 ```
 
-## Publishing
+| Option           | Type     | Default    | Description                                        |
+| ---------------- | -------- | ---------- | -------------------------------------------------- |
+| `baseUrl`        | `string` | —          | Base URL of your Beamdrop server                   |
+| `accessKey`      | `string` | —          | API access key (starts with `BDK_`)                |
+| `secretKey`      | `string` | —          | API secret key (starts with `sk_`)                 |
+| `connectTimeout` | `number` | `10000`    | Connection timeout in ms (reserved for future use) |
+| `timeout`        | `number` | `120000`   | Total request timeout in ms                        |
 
-1. Ensure `package.json` fields are correct (`name`, `version`, `repository`, `license`, `author`).
-2. Build (`npm run build`) and verify `dist/` contains expected files.
-3. Publish to npm:
+### Buckets
 
-```bash
-npm publish --access public
+```ts
+// Create a bucket
+await client.createBucket('my-bucket');
+
+// Delete an empty bucket
+await client.deleteBucket('my-bucket');
+
+// List all buckets
+const { buckets, count } = await client.listBuckets();
+
+// Check if a bucket exists
+const exists = await client.bucketExists('my-bucket');
 ```
 
-## Customize
+### Objects
 
-- Add CI (GitHub Actions) to run `npm test` and `npm run build` on PRs.
-- Add linting (ESLint) and formatting (Prettier) if desired.
+```ts
+// Upload an object
+const result = await client.putObject('bucket', 'path/to/file.txt', body);
+
+// Download an object (body + metadata)
+const obj = await client.getObject('bucket', 'path/to/file.txt');
+
+// Get metadata only (HEAD)
+const meta = await client.headObject('bucket', 'path/to/file.txt');
+
+// Check if an object exists
+const exists = await client.objectExists('bucket', 'path/to/file.txt');
+
+// Delete an object
+await client.deleteObject('bucket', 'path/to/file.txt');
+
+// List objects with prefix/delimiter filtering
+const listing = await client.listObjects('bucket', 'photos/', '/');
+console.log(listing.contents);       // objects
+console.log(listing.commonPrefixes); // "subdirectories"
+```
+
+### Presigned URLs (client-side)
+
+Generate HMAC-signed download URLs locally — no server round-trip:
+
+```ts
+const url = await client.presignedUrl('bucket', 'file.txt', 3600); // 1 hour
+```
+
+### Pretty Presigned URLs (server-side)
+
+Short, trackable download links managed by the server:
+
+```ts
+// Create (expires in 7 days, max 100 downloads)
+const link = await client.createPrettyPresignedUrl(
+  'bucket', 'file.txt', 7 * 86400, 100,
+);
+console.log(link.url); // "https://files.example.com/dl/x7kQ9m"
+
+// List all active pretty presigned URLs
+const { urls } = await client.listPrettyPresignedUrls();
+
+// Revoke a pretty presigned URL
+await client.revokePrettyPresignedUrl('x7kQ9m');
+```
+
+## Error Handling
+
+All API errors throw a `BeamdropException` with the HTTP status code and parsed error body:
+
+```ts
+import { Beamdrop, BeamdropException } from 'beamdrop';
+
+try {
+  await client.getObject('bucket', 'missing.txt');
+} catch (err) {
+  if (err instanceof BeamdropException) {
+    console.error(err.status);  // 404
+    console.error(err.message); // "Object not found"
+    console.error(err.body);    // full JSON error body
+  }
+}
+```
+
+A `status` of `0` indicates a client-side error (network failure or request timeout).
 
 ## License
 
-MIT
-
-```
-export class OtpService {
-```
+[MIT](LICENSE)
