@@ -1,11 +1,36 @@
 /**
  * Custom error thrown when a Beamdrop API request fails.
- * Carries the HTTP status code and the parsed JSON error body.
+ *
+ * Every failed HTTP response from the Beamdrop server is wrapped in this
+ * exception so callers can inspect the HTTP status code and the raw JSON
+ * error body returned by the API.
+ *
+ * A `status` of `0` indicates a client‑side error such as a network failure
+ * or request timeout (i.e. no HTTP response was received).
+ *
+ * @example
+ * ```ts
+ * try {
+ *   await beamdrop.getObject('my-bucket', 'missing-key.txt');
+ * } catch (err) {
+ *   if (err instanceof BeamdropException && err.status === 404) {
+ *     console.log('Object not found');
+ *   }
+ * }
+ * ```
  */
 export class BeamdropException extends Error {
+  /** HTTP status code of the failed response, or `0` for client‑side errors. */
   public readonly status: number;
+
+  /** Parsed JSON body from the error response, if available. */
   public readonly body?: Record<string, unknown>;
 
+  /**
+   * @param message - Human‑readable description of the error.
+   * @param status  - HTTP status code (`0` when no response was received).
+   * @param body    - Optional parsed JSON error body from the server.
+   */
   constructor(message: string, status: number = 0, body?: Record<string, unknown>) {
     super(message);
     this.name = 'BeamdropException';
@@ -18,84 +43,204 @@ export class BeamdropException extends Error {
 // Type definitions matching Beamdrop API responses
 // ----------------------------------------------------------------------
 
-/** Basic bucket information */
+/**
+ * Basic bucket information returned by the Beamdrop server.
+ *
+ * Represents a single bucket entry as it appears in listing responses.
+ */
 export interface BucketInfo {
+  /** Unique bucket name (3–63 lowercase alphanumeric characters, hyphens, or dots). */
   name: string;
-  createdAt: string; // ISO 8601 timestamp
+
+  /** Timestamp when the bucket was created, in ISO 8601 format (e.g. `"2025-06-15T08:30:00Z"`). */
+  createdAt: string;
 }
 
-/** Response from listing buckets */
+/**
+ * Response payload from {@link Beamdrop.listBuckets}.
+ *
+ * Contains the full list of buckets accessible to the authenticated API key.
+ */
 export interface ListBucketsResponse {
+  /** Array of bucket information objects. */
   buckets: BucketInfo[];
+
+  /** Total number of buckets returned. */
   count: number;
 }
 
-/** Response from creating a bucket */
+/**
+ * Response payload from {@link Beamdrop.createBucket}.
+ *
+ * Returned after a bucket has been successfully created on the server.
+ */
 export interface CreateBucketResponse {
+  /** Name of the newly created bucket. */
   bucket: string;
-  created: string; // ISO 8601
+
+  /** Timestamp when the bucket was created, in ISO 8601 format. */
+  created: string;
+
+  /** Server‑relative location path of the new bucket (e.g. `"/api/v1/buckets/my-bucket"`). */
   location: string;
 }
 
-/** Response from uploading an object (PUT / POST) */
+/**
+ * Response payload from {@link Beamdrop.putObject}.
+ *
+ * Returned after an object has been successfully uploaded to a bucket.
+ */
 export interface PutObjectResponse {
+  /** Bucket the object was stored in. */
   bucket: string;
+
+  /** Full object key including any path separators (e.g. `"uploads/photo.jpg"`). */
   key: string;
+
+  /** MD5 or SHA‑256 entity tag computed by the server for integrity verification. */
   etag: string;
+
+  /** Size of the stored object in bytes. */
   size: number;
-  url: string; // relative path to the object
+
+  /** Server‑relative URL path to the object (e.g. `"/api/v1/buckets/my-bucket/photo.jpg"`). */
+  url: string;
 }
 
-/** Object metadata (as returned by HEAD / GET) */
+/**
+ * Object metadata extracted from HTTP response headers.
+ *
+ * Returned by {@link Beamdrop.headObject} (HEAD) and included in
+ * {@link GetObjectResponse} (GET).
+ */
 export interface ObjectMetadata {
+  /** MIME type of the object (e.g. `"image/png"`, `"application/octet-stream"`). */
   content_type: string;
+
+  /** Size of the object in bytes. */
   content_length: number;
+
+  /** Entity tag for cache validation and integrity checks. */
   etag: string;
-  last_modified: string; // ISO 8601
+
+  /** Timestamp of the last modification in ISO 8601 format. */
+  last_modified: string;
 }
 
-/** Response from downloading an object (raw) – includes body */
+/**
+ * Response from {@link Beamdrop.getObject} – includes the raw file body
+ * together with all metadata from the response headers.
+ *
+ * **Note:** The `body` is returned as a UTF‑8 string via `response.text()`.
+ * For binary files (images, archives, etc.) the content may be corrupted;
+ * consider downloading through a presigned URL for binary payloads.
+ */
 export interface GetObjectResponse extends ObjectMetadata {
-  body: string; // raw file content
+  /** Raw file content as a UTF‑8 string. */
+  body: string;
 }
 
-/** Object info used in listings */
+/**
+ * Summary information for a single object as returned in
+ * {@link ListObjectsResponse.contents}.
+ */
 export interface ObjectInfo {
+  /** Full object key (may contain `/` path separators). */
   key: string;
+
+  /** Size of the object in bytes. */
   size: number;
-  lastModified: string; // ISO 8601
+
+  /** Timestamp of the last modification in ISO 8601 format. */
+  lastModified: string;
+
+  /** Entity tag for cache validation and integrity checks. */
   etag: string;
 }
 
-/** Response from listing objects (with optional prefix/delimiter) */
+/**
+ * Response payload from {@link Beamdrop.listObjects}.
+ *
+ * Supports prefix/delimiter‑based filtering for hierarchical key navigation
+ * (similar to S3 `ListObjectsV2`).
+ */
 export interface ListObjectsResponse {
+  /** Bucket that was listed. */
   bucket: string;
+
+  /** The prefix filter that was applied, or `""` if none. */
   prefix: string;
+
+  /** The delimiter used for grouping, or `""` if none. */
   delimiter: string;
+
+  /** Maximum number of keys that were requested (1–1000). */
   maxKeys: number;
+
+  /** `true` when there are more results beyond `maxKeys`; paginate to retrieve them. */
   isTruncated: boolean;
+
+  /** Array of objects matching the listing criteria. */
   contents: ObjectInfo[];
+
+  /**
+   * Array of key prefixes that act as "virtual directories" when a
+   * `delimiter` is specified (e.g. `["photos/", "docs/"]`).
+   */
   commonPrefixes: string[];
 }
 
-/** Server‑side pretty presigned URL information */
+/**
+ * Detailed information about a server‑managed pretty presigned URL.
+ *
+ * Pretty presigned URLs are short, human‑friendly download links
+ * (e.g. `https://files.example.com/dl/abc123`) that are tracked and
+ * rate‑limited on the server.
+ */
 export interface PrettyPresignedUrlInfo {
+  /** Unique opaque token identifying this presigned URL. */
   token: string;
-  url: string; // full download URL (e.g. https://…/dl/{token})
+
+  /** Full download URL (e.g. `"https://files.example.com/dl/abc123"`). */
+  url: string;
+
+  /** Bucket the presigned URL points to. */
   bucket: string;
+
+  /** Object key the presigned URL points to. */
   key: string;
-  method: string; // e.g. "GET"
-  expiresAt: string | null; // ISO 8601 or null
+
+  /** HTTP method the URL is valid for (typically `"GET"`). */
+  method: string;
+
+  /** Expiry timestamp in ISO 8601 format, or `null` if the URL never expires. */
+  expiresAt: string | null;
+
+  /** Maximum allowed downloads before the URL is revoked, or `null` for unlimited. */
   maxDownloads: number | null;
-  createdAt: string; // ISO 8601
+
+  /** Timestamp when the presigned URL was created, in ISO 8601 format. */
+  createdAt: string;
 }
 
-/** Response from creating a pretty presigned URL */
+/**
+ * Response payload from {@link Beamdrop.createPrettyPresignedUrl}.
+ *
+ * Identical in shape to {@link PrettyPresignedUrlInfo} — includes the
+ * generated token, full download URL, and all associated metadata.
+ */
 export type CreatePrettyPresignedUrlResponse = PrettyPresignedUrlInfo;
 
-/** Response from listing pretty presigned URLs */
+/**
+ * Response payload from {@link Beamdrop.listPrettyPresignedUrls}.
+ *
+ * Contains every active (non‑revoked) pretty presigned URL managed by the server.
+ */
 export interface ListPrettyPresignedUrlsResponse {
+  /** Array of active pretty presigned URL records. */
   urls: PrettyPresignedUrlInfo[];
+
+  /** Total number of URLs returned. */
   count: number;
 }
 
