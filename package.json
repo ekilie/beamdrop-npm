@@ -1,6 +1,6 @@
 {
-  "name": "npm-package-starter-template",
-  "description": "A minimal, configurable TypeScript npm package starter template with build and test setup.",
+  "name": "beamdrop",
+  "description": "Official npm package for beamdrop - A lightweight, self-hosted file sharing server with S3-compatible API.",
   "version": "0.0.0",
   "main": "./dist/index.cjs",
   "module": "./dist/index.mjs",
@@ -8,13 +8,13 @@
   "homepage": "",
   "repository": {
     "type": "git",
-    "url": ""
+    "url": "https://github.com/ekilie/beamdrop-npm.git"
   },
   "bugs": {
-    "url": ""
+    "url": "https://github.com/ekilie/beamdrop-npm/issues"
   },
   "license": "MIT",
-  "author": "<Your Name> <email@example.com>",
+  "author": "Tachera Sasi",
   "scripts": {
     "build": "tsup",
     "clean": "rm -rf dist",
