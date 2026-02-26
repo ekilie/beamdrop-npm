@@ -4,7 +4,7 @@ Official TypeScript/JavaScript client for [Beamdrop](https://github.com/ekilie/b
 
 ## Features
 
-- Full **bucket** CRUD — create, delete, list, exists check
+- Full **bucket** operations — create, create-if-not-exists (idempotent), delete, list, exists check
 - **Object** upload, download, delete, HEAD, and prefix-based listing
 - **Client-side presigned URLs** — HMAC-SHA256 tokens generated locally, no server round-trip
 - **Server-side pretty presigned URLs** — short, human-friendly download links with expiry and download limits
@@ -66,6 +66,12 @@ new Beamdrop(options)
 ```ts
 // Create a bucket
 await client.createBucket('my-bucket');
+
+// Create if missing (idempotent; never throws 409 for existing bucket)
+const ensured = await client.createBucketIfNotExists('my-bucket');
+if ('exists' in ensured) {
+  console.log('Bucket already existed');
+}
 
 // Delete an empty bucket
 await client.deleteBucket('my-bucket');

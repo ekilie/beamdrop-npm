@@ -86,6 +86,25 @@ export interface CreateBucketResponse {
 }
 
 /**
+ * Response payload from {@link Beamdrop.createBucketIfNotExists}.
+ *
+ * Returns normal creation metadata when a bucket is newly created,
+ * or an idempotent "already exists" payload when present.
+ */
+export type CreateBucketIfNotExistsResponse =
+  | CreateBucketResponse
+  | {
+    /** Name of the bucket. */
+    bucket: string;
+
+    /** `true` when the bucket already existed. */
+    exists: true;
+
+    /** Server‑relative location path of the bucket. */
+    location: string;
+  };
+
+/**
  * Response payload from {@link Beamdrop.putObject}.
  *
  * Returned after an object has been successfully uploaded to a bucket.
@@ -365,6 +384,31 @@ export class Beamdrop {
    */
   async createBucket(name: string): Promise<CreateBucketResponse> {
     return this.request('PUT', `/api/v1/buckets/${name}`);
+  }
+
+  /**
+   * Create a bucket if it does not already exist (idempotent).
+   *
+   * Returns standard creation metadata when a bucket is newly created,
+   * or an "already exists" payload (`exists: true`) when it is present.
+   * Unlike {@link createBucket}, this endpoint never returns `409 Conflict`
+   * for pre‑existing buckets.
+   *
+   * @param name - Bucket name (e.g. `"avatars"`, `"invoices"`).
+   * @returns A {@link CreateBucketIfNotExistsResponse} object.
+   *
+   * @example
+   * ```ts
+   * const result = await client.createBucketIfNotExists('avatars');
+   * if ('exists' in result) {
+   *   console.log('Bucket already existed');
+   * } else {
+   *   console.log('Bucket created at', result.created);
+   * }
+   * ```
+   */
+  async createBucketIfNotExists(name: string): Promise<CreateBucketIfNotExistsResponse> {
+    return this.request('PUT', `/api/v1/buckets/${name}?createIfNotExists=true`);
   }
 
   /**
