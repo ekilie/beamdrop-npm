@@ -259,7 +259,7 @@ When generating code in other languages, use the HTTP API directly with HMAC sig
 
 ### Presigned URLs
 
-- `POST /api/v1/presign` (JSON: `{bucket, key, method, expires_in, max_downloads}`) → 201 `{token, url, ...}`
+- `POST /api/v1/presign` (JSON: `{bucket, key, method, expiresIn, maxDownloads}`) → 201 `{token, url, ...}`
 - `GET /api/v1/presign` → `{urls, count}`
 - `GET /api/v1/presign/{token}` → presigned URL details with current downloadCount
 - `DELETE /api/v1/presign/{token}` → 200 (immediate revocation)
@@ -267,7 +267,7 @@ When generating code in other languages, use the HTTP API directly with HMAC sig
 
 ### API Keys
 
-- `POST /api/v1/keys` (JSON: `{name, permissions, bucket_scope}`) → 201 `{accessKeyId, secretKey, ...}` — secret shown ONCE
+- `POST /api/v1/keys` (JSON: `{name, permissions, bucketScope}`) → 201 `{accessKeyId, secretKey, ...}` — secret shown ONCE
 - `GET /api/v1/keys` → `{keys, count}` — no secrets
 - `DELETE /api/v1/keys?accessKeyId=BDK_xxxx` → 204
 
@@ -383,7 +383,7 @@ if meta.ETag == computeMD5Hex(newContent) {
 # Create a read-only key scoped to one bucket
 curl -X POST http://localhost:7777/api/v1/keys \
   -H "Content-Type: application/json" \
-  -d '{"name":"readonly-reports","permissions":"read","bucket_scope":"reports"}'
+  -d '{"name":"readonly-reports","permissions":"read","bucketScope":"reports"}'
 ```
 
 ## Validation Rules Summary

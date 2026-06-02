@@ -192,8 +192,8 @@ const response = await fetch(`${baseUrl}${path}`, {
   "bucket": "my-bucket",
   "key": "file.txt",
   "method": "GET",
-  "expires_in": 3600,
-  "max_downloads": 10
+  "expiresIn": 3600,
+  "maxDownloads": 10
 }
 ```
 
@@ -202,8 +202,8 @@ Fields:
 - `bucket` (required): Target bucket name
 - `key` (required): Target object key
 - `method` (optional, default "GET"): HTTP method allowed
-- `expires_in` (optional): Seconds until expiry. Omit for no expiry
-- `max_downloads` (optional): Maximum download count. Omit for unlimited
+- `expiresIn` (optional): Seconds until expiry. Omit for no expiry
+- `maxDownloads` (optional): Maximum download count. Omit for unlimited
 
 ### API Keys
 
@@ -221,8 +221,8 @@ Fields:
 {
   "name": "my-key",
   "permissions": "read,write",
-  "bucket_scope": "optional-bucket",
-  "expires_in": "720h"
+  "bucketScope": "optional-bucket",
+  "expiresIn": 2592000
 }
 ```
 
@@ -455,7 +455,7 @@ Three independent token-bucket tiers per IP address:
    → 200 {"bucket":"ai-outputs", "key":"session-123/result.json", "etag":"...", "size":...}
 
 3. POST /api/v1/presign
-   Body: {"bucket":"ai-outputs", "key":"session-123/result.json", "method":"GET", "expires_in":86400}
+   Body: {"bucket":"ai-outputs", "key":"session-123/result.json", "method":"GET", "expiresIn":86400}
    → 201 {"url":"https://server/dl/abc123...", "token":"abc123..."}
 
 4. Return the presigned URL to the user — they can download without authentication
@@ -517,7 +517,7 @@ Three independent token-bucket tiers per IP address:
 
 ```
 POST /api/v1/keys
-Body: {"name":"readonly-reports", "permissions":"read", "bucket_scope":"reports", "expires_in":"720h"}
+Body: {"name":"readonly-reports", "permissions":"read", "bucketScope":"reports", "expiresIn":2592000}
 → 201 {"accessKeyId":"BDK_...", "secretKey":"sk_...", ...}
 
 This key can only read from the "reports" bucket and expires in 30 days.
