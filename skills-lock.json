@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "beamdrop": {
+      "source": "ekilie/beamdrop-skills",
+      "sourceType": "github",
+      "skillPath": "skills/beamdrop/SKILL.md",
+      "computedHash": "6e0b5e3618aec7f0a3a8c0ad4cf559ebc63598afc79e4d648eccf44f170205ed"
+    }
+  }
+}
